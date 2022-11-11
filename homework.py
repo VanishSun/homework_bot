@@ -8,8 +8,11 @@ import requests
 from dotenv import load_dotenv
 from telegram import Bot
 
-from exceptions import (NotImplementedStatusException, ServerError,
-                        TokensNotImplementedException)
+from exceptions import (HomeworksKeyNotFoundException,
+                        NotImplementedStatusException,
+                        ServerError,
+                        TokensNotImplementedException,
+                        )
 
 load_dotenv()
 
@@ -60,8 +63,8 @@ def send_message(bot, message):
 
 def get_api_answer(current_timestamp):
     """Получение API с сервера Яндекса."""
-    timestamp = current_timestamp or int(time.time())
-    params = {'from_date': timestamp - RETRY_TIME}
+    timestamp = current_timestamp
+    params = {'from_date': timestamp }
     homework_statuses = requests.get(ENDPOINT, headers=HEADERS, params=params)
     if homework_statuses.status_code == 505:
         logger.error('Ошибка 500: cервер недоступен.')
@@ -75,11 +78,17 @@ def get_api_answer(current_timestamp):
 
 def check_response(response):
     """Проверка наличия ответа о статусе ДЗ."""
-    try:
+    if response.get('homeworks'):
         homework = response.get('homeworks')
+        if homework is dict:
+            homework_list: list
+            homework_list[0] = homework
+            return homework_list
         return homework
-    except Exception:
-        logger.error('Отсутствует ключ "homeworks" в API.')
+    logger.error('Отсутствует ключ "homeworks" в API.')
+    if response is dict:
+        return None
+    raise HomeworksKeyNotFoundException('Токены недоступны')
 
 
 def parse_status(homework):
@@ -105,17 +114,20 @@ def check_tokens():
     if PRACTICUM_TOKEN:
         if TELEGRAM_TOKEN:
             if TELEGRAM_CHAT_ID:
-                return None
-    logger.critical('отсутствует обязательная переменная окружения')
-    raise TokensNotImplementedException('Токены недоступны')
+                return True
+    else:
+        return False
 
 
 def main():
     """Основная логика работы бота."""
-    check_tokens()
+    check_status = check_tokens()
+    if check_status is False:
+        logger.critical('отсутствует обязательная переменная окружения')
+        raise TokensNotImplementedException('Токены недоступны')
 
     bot = Bot(token=TELEGRAM_TOKEN)
-    current_timestamp = int(time.time())
+    current_timestamp = 0
     message1 = None
     message_queue = ''
     while True:
