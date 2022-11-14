@@ -6,12 +6,14 @@ from logging.handlers import RotatingFileHandler
 
 import requests
 from dotenv import load_dotenv
-from telegram import Bot
+from telegram import Bot, TelegramError
 
 from exceptions import (HomeworksKeyNotFoundException,
                         NotImplementedStatusException,
                         ServerError,
-                        TokensNotImplementedException,
+                        StatusKeyError,
+                        NameKeyError,
+                        NotListTypeError
                         )
 
 load_dotenv()
@@ -44,10 +46,8 @@ file_handler = RotatingFileHandler(
     backupCount=3
 )
 stream_handler = logging.StreamHandler(stream=sys.stdout)
-
 file_handler.setFormatter(formatter)
 stream_handler.setFormatter(formatter)
-
 logger.addHandler(stream_handler)
 logger.addHandler(file_handler)
 
@@ -57,18 +57,18 @@ def send_message(bot, message):
     try:
         bot.send_message(TELEGRAM_CHAT_ID, message)
         logger.info(f'Пользователю отправленно сообщение: {message}')
-    except Exception:
-        logger.error('Ошибка отправки сообщения пользователю.')
+    except TelegramError as telegram_error:
+        logger.error(f'Ошибка отправки telegram сообщения: {telegram_error}')
 
 
 def get_api_answer(current_timestamp):
     """Получение API с сервера Яндекса."""
     timestamp = current_timestamp
-    params = {'from_date': timestamp }
+    params = {'from_date': timestamp}
     homework_statuses = requests.get(ENDPOINT, headers=HEADERS, params=params)
     if homework_statuses.status_code == 505:
-        logger.error('Ошибка 500: cервер недоступен.')
-        raise ServerError('Ошибка 500: cервер недоступен.')
+        logger.error('Ошибка 505: cервер недоступен.')
+        raise ServerError('Ошибка 505: cервер недоступен.')
     if homework_statuses.status_code != 200:
         logger.error('Сбой при обращении к эндпойнту.')
         raise ServerError('Сбой при обращении к эндпойнту.')
@@ -78,73 +78,82 @@ def get_api_answer(current_timestamp):
 
 def check_response(response):
     """Проверка наличия ответа о статусе ДЗ."""
-    if response.get('homeworks'):
+    if 'homeworks' in response.keys():
         homework = response.get('homeworks')
-        if homework is dict:
-            homework_list: list
-            homework_list[0] = homework
-            return homework_list
+        if not isinstance(homework, list):
+            raise NotListTypeError('В ответ API по ключу попал не список.')
         return homework
     logger.error('Отсутствует ключ "homeworks" в API.')
-    if response is dict:
-        return None
-    raise HomeworksKeyNotFoundException('Токены недоступны')
+    raise HomeworksKeyNotFoundException('Отсутствует ключ "homeworks" в API.')
 
 
 def parse_status(homework):
     """Парсинг информации о статусе ДЗ."""
-    if len(homework) > 0:
-        homework_name = homework[0].get('homework_name')
-        homework_status = homework[0].get('status')
-
-        if homework_status in HOMEWORK_STATUSES:
-            verdict = homework_status
-            return (f'Изменился статус проверки работы "{homework_name}".'
-                    f'{verdict}')
-        logger.error('Неизвестный статус ДЗ в ответе API.')
-        raise NotImplementedStatusException(
-            'Неизвестный статус ДЗ в ответе API.'
-        )
-    logger.debug('Отсутсвие обновленных статусов проверки ДЗ.')
-    return None
+    if isinstance(homework, dict):
+        logger.info('Словарь в ответе API.')
+        homework = [homework, ]
+    if homework == []:
+        logger.debug('Отсутсвие обновленных статусов проверки ДЗ.')
+        return None
+    homework_name = homework[0].get('homework_name')
+    homework_status = homework[0].get('status')
+    if homework_status is None:
+        logger.error('Ответ API не содержит ключа "status".')
+        raise StatusKeyError('Ответ API не содержит ключа "status".')
+    if homework_name is None:
+        logger.error('Ответ API не содержит ключа "name".')
+        raise NameKeyError('Ответ API не содержит ключа "name".')
+    if homework_status in HOMEWORK_STATUSES:
+        verdict = HOMEWORK_STATUSES[homework_status]
+        return (f'Изменился статус проверки работы "{homework_name}".'
+                f'{verdict}')
+    logger.error('Неизвестный статус ДЗ в ответе API.')
+    raise NotImplementedStatusException('Неизвестный статус ДЗ в ответе API.')
 
 
 def check_tokens():
     """Проверка наличия секретных токенов."""
-    if PRACTICUM_TOKEN:
-        if TELEGRAM_TOKEN:
-            if TELEGRAM_CHAT_ID:
-                return True
-    else:
-        return False
+    error_msg = (
+        'Программа принудительно остановлена. '
+        'Отсутствует обязательная переменная окружения:')
+    tokens_bool_flag = True
+    if PRACTICUM_TOKEN is None:
+        tokens_bool_flag = False
+        logger.critical(f'{error_msg} PRACTICUM_TOKEN')
+    if TELEGRAM_TOKEN is None:
+        tokens_bool_flag = False
+        logger.critical(f'{error_msg} TELEGRAM_TOKEN')
+    if TELEGRAM_CHAT_ID is None:
+        tokens_bool_flag = False
+        logger.critical(f'{error_msg} TELEGRAM_CHAT_ID')
+    return tokens_bool_flag
 
 
 def main():
     """Основная логика работы бота."""
-    check_status = check_tokens()
-    if check_status is False:
-        logger.critical('отсутствует обязательная переменная окружения')
-        raise TokensNotImplementedException('Токены недоступны')
-
+    if not check_tokens():
+        exit()
     bot = Bot(token=TELEGRAM_TOKEN)
-    current_timestamp = 0
-    message1 = None
-    message_queue = ''
+    send_message(bot, 'Бот начал работу. Держитесь!!!')
+    current_timestamp = int(time.time())
+    error_1 = None
+    error_queue = ''
     while True:
         try:
             response = get_api_answer(current_timestamp)
+            current_timestamp = int(time.time())
             homework = check_response(response)
             message = parse_status(homework)
             if message is not None:
                 send_message(bot, message)
-            message_queue = ''
+            error_queue = ''
             time.sleep(RETRY_TIME)
 
         except Exception as error:
-            if message_queue != message1:
-                message1 = f'Сбой в работе программы: {error}'
-                send_message(bot, message1)
-            message_queue = message1
+            if error_queue != error_1:
+                error_1 = f'Сбой в работе программы: {error}'
+                send_message(bot, error_1)
+            error_queue = error_1
             time.sleep(RETRY_TIME)
 
 

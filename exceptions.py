@@ -1,11 +1,22 @@
 class HomeworksKeyNotFoundException(Exception):
-    pass
+    """Ключ 'homework' отсутствует."""
+
 
 class NotImplementedStatusException(Exception):
-    pass
+    """Неизвестный статус ДЗ в ответе API."""
+
 
 class ServerError(Exception):
-    pass
+    """Не удовлетворительный ответ сервера."""
 
-class TokensNotImplementedException(Exception):
-    pass
+
+class StatusKeyError(KeyError):
+    """Ответ API не содержит ключа 'status'."""
+
+
+class NameKeyError(KeyError):
+    """Ответ API не содержит ключа 'name'."""
+
+
+class NotListTypeError(TypeError):
+    """В ответ API по ключу попал не список.'"""
