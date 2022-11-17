@@ -14,7 +14,8 @@ from exceptions import (
     NameKeyError,
     NotImplementedStatusException,
     NotListTypeError,
-    ServerError, StatusKeyError
+    ServerError,
+    StatusKeyError
 )
 
 load_dotenv()
@@ -23,10 +24,9 @@ PRACTICUM_TOKEN = os.getenv('PRACT_TOKEN')
 TELEGRAM_TOKEN = os.getenv('TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('CHAT_ID')
 
-RETRY_TIME = 10
+RETRY_TIME = 600
 ENDPOINT = 'https://practicum.yandex.ru/api/user_api/homework_statuses/'
 HEADERS = {'Authorization': f'OAuth {PRACTICUM_TOKEN}'}
-
 
 VERDICTS = {
     'approved': 'Работа проверена: ревьюеру всё понравилось. Ура!',
@@ -34,36 +34,19 @@ VERDICTS = {
     'rejected': 'Работа проверена: у ревьюера есть замечания.'
 }
 
-if __name__ == '__main__':
-    logger = logging.getLogger(__name__)
-    logger.setLevel(logging.DEBUG)
-    formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - func: '
-        '%(funcName)s - line %(lineno)d - %(message)s'
-    )
-    file_handler = RotatingFileHandler(
-        'homework.log',
-        maxBytes=5000000,
-        backupCount=3
-    )
-    stream_handler = logging.StreamHandler(stream=sys.stdout)
-    file_handler.setFormatter(formatter)
-    stream_handler.setFormatter(formatter)
-    logger.addHandler(stream_handler)
-    logger.addHandler(file_handler)
 
-
-def send_message(bot, message):
+def send_message(bot: Bot, message: str) -> None:
     """Отправка сообщение пользователю через бота."""
     try:
         logger.info(f'Бот начал отправку telegram сообщения: {message}')
         bot.send_message(TELEGRAM_CHAT_ID, message)
-        logger.info(f'Пользователю отправленно сообщение: {message}')
     except TelegramError as telegram_error:
         logger.error(f'Ошибка отправки telegram сообщения: {telegram_error}')
+    else:
+        logger.info(f'Пользователю отправленно сообщение: {message}')
 
 
-def get_api_answer(current_timestamp):
+def get_api_answer(current_timestamp: int) -> dict:
     """Получение API с сервера Яндекса."""
     timestamp = current_timestamp
     request_params = {
@@ -73,55 +56,47 @@ def get_api_answer(current_timestamp):
     response = requests.get(**request_params)
     if response.status_code != HTTPStatus.OK:
         raise ServerError(
-            'Сбой при обращении к эндпойнту. Код ответа сервера: '
-            f'{response.status_code}'
+            'Сбой при обращении к эндпойнту. Ответ сервера: '
+            f'{response.status_code}. Reason: {response.reason}. '
+            f'Requested Params: {request_params}.'
         )
-    # Я тоже согласен, что это выглядит лишним, но тест
-    # test_check_response_not_dict подкладывает mock в виде листа
-    # и проверяет что на выходе словарь :) все чтобы голову сломать студенту
-    return dict(response.json())
+    return response.json()
 
 
-def check_response(response):
+def check_response(response: dict) -> list:
     """Проверка наличия ответа о статусе ДЗ."""
-    # Борясь с тестом в строке 64 - я уверен, что пришел dict
-    # Мне кажется еще раз проверять на dict - лишнее тут
-    if 'homeworks' in response:
-        homework = response.get('homeworks')
-        if not isinstance(homework, list):
-            raise NotListTypeError(
-                'В ответ API по ключу попал не список.'
-                f'Ответ API {homework}.'
-            )
-        return homework
-    raise HomeworksKeyNotFoundException(
-        'Отсутствует ключ "homeworks" в API.'
-        f'Ответ API: {response}'
+    if isinstance(response, dict):
+        if 'homeworks' in response:
+            new_homework = response.get('homeworks')
+            if not isinstance(new_homework, list):
+                raise NotListTypeError(
+                    'В ответ API по ключу попал не список.'
+                    f'Ответ API: {new_homework}.'
+                )
+            return new_homework
+        raise HomeworksKeyNotFoundException(
+            'Отсутствует ключ "homeworks" в API.'
+            f'Ответ API: {response}'
+        )
+    raise NotListTypeError(
+        'В ответ API попал список.'
+        f'Ответ API: {response}.'
     )
 
 
-def parse_status(homework):
+def parse_status(homework: dict) -> str:
     """Парсинг информации о статусе ДЗ."""
-    # В реальности сюда должен прийти пустой или полный список
-    # Все работы - это словари, лежащие в списке. Так API настроен.
-    # Но вот тест test_parse_status подкидывает сюда словарь - с этим и борюсь
-    # если словарь - то докидываю его в список нулевым элементом
-    if isinstance(homework, dict):
-        homework = [homework, ]
-    if not homework:
-        logger.debug('Отсутсвие обновленных статусов проверки ДЗ.')
-        return None
-    homework_name = homework[0].get('homework_name')
-    homework_status = homework[0].get('status')
+    homework_name = homework.get('homework_name')
+    homework_status = homework.get('status')
     if homework_status is None:
         raise StatusKeyError(
             'Ответ API не содержит ключа "status".'
-            f'В ответ пришел словарь: {homework[0]}'
+            f'В ответ пришел словарь: {homework}'
         )
     if homework_name is None:
         raise NameKeyError(
             'Ответ API не содержит ключа "name".'
-            f'В ответ пришел словарь: {homework[0]}'
+            f'В ответ пришел словарь: {homework}'
         )
     if homework_status in VERDICTS:
         verdict = VERDICTS[homework_status]
@@ -134,11 +109,9 @@ def parse_status(homework):
     )
 
 
-def check_tokens():
+def check_tokens() -> bool:
     """Проверка наличия секретных токенов."""
-    if all([PRACTICUM_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID]):
-        return True
-    return False
+    return all([PRACTICUM_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID])
 
 
 def main():
@@ -156,21 +129,41 @@ def main():
     while True:
         try:
             response = get_api_answer(current_timestamp)
-            homework = check_response(response)
-            message = parse_status(homework)
-            if message is not None:
-                if message not in previous_messages:
-                    send_message(bot, message)
+            new_homework = check_response(response)
+            if not new_homework:
+                message = 'Отсутсвует обновление статуса проверки ДЗ.'
+            else:
+                message = parse_status(new_homework[0])
+            if message not in previous_messages:
+                send_message(bot, message)
         except Exception as error:
             logger.error(f'{error}')
             message = f'Сбой в работе программы: {error}'
             if message not in previous_messages:
                 send_message(bot, message)
         finally:
+            previous_messages.clear()
             previous_messages[message] = True
             current_timestamp = int(time.time())
             time.sleep(RETRY_TIME)
 
 
 if __name__ == '__main__':
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.INFO)
+    formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - func: '
+        '%(funcName)s - line %(lineno)d - %(message)s'
+    )
+    file_handler = RotatingFileHandler(
+        'homework.log',
+        maxBytes=5000000,
+        backupCount=3
+    )
+    stream_handler = logging.StreamHandler(stream=sys.stdout)
+    file_handler.setFormatter(formatter)
+    stream_handler.setFormatter(formatter)
+    logger.addHandler(stream_handler)
+    logger.addHandler(file_handler)
+
     main()
