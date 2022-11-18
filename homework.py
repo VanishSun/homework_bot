@@ -58,30 +58,33 @@ def get_api_answer(current_timestamp: int) -> dict:
         raise ServerError(
             'Сбой при обращении к эндпойнту. Ответ сервера: '
             f'{response.status_code}. Reason: {response.reason}. '
-            f'Requested Params: {request_params}.'
+            # Поменял {request_params} на ENDPOINT & HEADERS
+            # потому что в сообщение приходило каждый раз новое
+            # время и сообщение каждый раз было уникальным
+            f'Url: {ENDPOINT}. Headers: {HEADERS}'
         )
     return response.json()
 
 
 def check_response(response: dict) -> list:
     """Проверка наличия ответа о статусе ДЗ."""
-    if isinstance(response, dict):
-        if 'homeworks' in response:
-            new_homework = response.get('homeworks')
-            if not isinstance(new_homework, list):
-                raise NotListTypeError(
-                    'В ответ API по ключу попал не список.'
-                    f'Ответ API: {new_homework}.'
-                )
-            return new_homework
+    if not isinstance(response, dict):
+        raise NotListTypeError(
+            'В ответ API попал список.'
+            f'Ответ API: {response}.'
+        )
+    if 'homeworks' not in response:
         raise HomeworksKeyNotFoundException(
             'Отсутствует ключ "homeworks" в API.'
             f'Ответ API: {response}'
         )
-    raise NotListTypeError(
-        'В ответ API попал список.'
-        f'Ответ API: {response}.'
-    )
+    new_homework = response.get('homeworks')
+    if not isinstance(new_homework, list):
+        raise NotListTypeError(
+            'В ответ API по ключу попал не список.'
+            f'Ответ API: {new_homework}.'
+        )
+    return new_homework
 
 
 def parse_status(homework: dict) -> str:
@@ -125,25 +128,29 @@ def main():
     bot = Bot(token=TELEGRAM_TOKEN)
     send_message(bot, 'Бот начал работу. Держитесь!!!')
     current_timestamp = int(time.time())
-    previous_messages = {}
+    current_message = ''
+    previous_message = ''
     while True:
         try:
             response = get_api_answer(current_timestamp)
             new_homework = check_response(response)
             if not new_homework:
-                message = 'Отсутсвует обновление статуса проверки ДЗ.'
+                current_message = 'Отсутсвует обновление статуса проверки ДЗ.'
+                logger.debug(
+                    f'Цикл проверки завершен с сообщением: {current_message}'
+                )
             else:
-                message = parse_status(new_homework[0])
-            if message not in previous_messages:
-                send_message(bot, message)
+                current_message = parse_status(new_homework[0])
+            if current_message != previous_message:
+                send_message(bot, current_message)
         except Exception as error:
             logger.error(f'{error}')
-            message = f'Сбой в работе программы: {error}'
-            if message not in previous_messages:
-                send_message(bot, message)
+            current_message = f'Сбой в работе программы: {error}'
+            if current_message != previous_message:
+                send_message(bot, current_message)
         finally:
-            previous_messages.clear()
-            previous_messages[message] = True
+            previous_message = ''
+            previous_message = current_message
             current_timestamp = int(time.time())
             time.sleep(RETRY_TIME)
 
