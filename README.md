@@ -38,4 +38,14 @@ Run program:
 python3 homework.py
 ````
 
+## License:
+
+MIT
+
+## Author:
+
+Ivan Verozub
+
+## PS:
+
 Relax and wait message!
